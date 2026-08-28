@@ -2,9 +2,8 @@ import pandas as pd
 import time
 import re
 
-# -----------------------------------
+
 # 1. Load the dataset
-# -----------------------------------
 
 file_path = "NewsCategorizer.csv"
 
