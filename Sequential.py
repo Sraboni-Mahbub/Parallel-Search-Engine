@@ -1,15 +1,15 @@
+
+
 import pandas as pd
 import time
 import re
 
 
-#Load the dataset
-
 file_path = "NewsCategorizer.csv"
 
 df = pd.read_csv(file_path)
 
-# Replace missing values with empty strings
+# Replace empty strings
 df["headline"] = df["headline"].fillna("")
 df["short_description"] = df["short_description"].fillna("")
 df["keywords"] = df["keywords"].fillna("")
@@ -17,8 +17,7 @@ df["keywords"] = df["keywords"].fillna("")
 print("Total documents:", len(df))
 
 
-#Seach documents
-
+#Search documents
 documents = (
     df["headline"].astype(str)
     + " "
@@ -27,29 +26,25 @@ documents = (
     + df["keywords"].astype(str)
 ).tolist()
 
-#User enters search query
+#Input Query
 
 query = input("\nEnter search query: ")
 
-#Search Function for sequential
 
-def sequential_search(query, documents):
+def Sequential(query, documents):
 
     query_words = query.lower().split()
 
     results = []
 
-    # Start timing only the search
     start_time = time.perf_counter()
 
-    # Search every document ONE BY ONE
     for index, document in enumerate(documents):
 
         text = document.lower()
 
         score = 0
 
-        # Count occurrences of every query word
         for word in query_words:
 
             occurrences = len(
@@ -61,17 +56,14 @@ def sequential_search(query, documents):
 
             score += occurrences
 
-        # Save matching documents
         if score > 0:
             results.append((index, score))
 
-    # Rank results by relevance
     results.sort(
         key=lambda x: x[1],
         reverse=True
     )
 
-    # Stop timer
     end_time = time.perf_counter()
 
     execution_time = end_time - start_time
@@ -80,11 +72,7 @@ def sequential_search(query, documents):
 
 
 
-
-
-#Perform sequential search
-
-results, execution_time = sequential_search(
+results, execution_time = Sequential(
     query,
     documents
 )
@@ -121,15 +109,15 @@ for rank, (index, score) in enumerate(
         df.iloc[index]["category"]
     )
 
-    print(
+    '''print(
         "Score:",
         score
-    )
+    )'''
 
-    print(
+    '''print(
         "Description:",
         df.iloc[index]["short_description"]
-    )
+    )'''
 
 
 #Display execution time
