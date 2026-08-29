@@ -78,13 +78,9 @@ results, execution_time = Sequential(
 )
 
 
-#results
 
-print("\n" + "=" * 60)
 
-print("SEQUENTIAL SEARCH ENGINE")
-
-print("=" * 60)
+print("SEARCH RESULTS")
 
 print("Query:", query)
 
@@ -122,11 +118,7 @@ for rank, (index, score) in enumerate(
 
 #Display execution time
 
-print("\n" + "=" * 60)
-
-print("SEQUENTIAL SEARCH PERFORMANCE")
-
-print("=" * 60)
+print("TIME CALCULATION")
 
 print(
     f"Execution time: "
