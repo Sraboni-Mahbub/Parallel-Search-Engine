@@ -1,0 +1,9 @@
+To run code:
+---.\venv\Scripts\Activate.ps1
+
+Environment setup:
+---python -m venv venv
+---.\venv\Scripts\Activate.ps1
+
+Python libraries setup:
+---pip install pandas

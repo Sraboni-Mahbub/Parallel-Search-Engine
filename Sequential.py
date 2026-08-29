@@ -3,7 +3,7 @@ import time
 import re
 
 
-# 1. Load the dataset
+#Load the dataset
 
 file_path = "NewsCategorizer.csv"
 
@@ -17,9 +17,7 @@ df["keywords"] = df["keywords"].fillna("")
 print("Total documents:", len(df))
 
 
-# -----------------------------------
-# 2. Prepare searchable documents
-# -----------------------------------
+#Seach documents
 
 documents = (
     df["headline"].astype(str)
@@ -29,10 +27,11 @@ documents = (
     + df["keywords"].astype(str)
 ).tolist()
 
+#User enters search query
 
-# -----------------------------------
-# 3. Sequential search function
-# -----------------------------------
+query = input("\nEnter search query: ")
+
+#Search Function for sequential
 
 def sequential_search(query, documents):
 
@@ -80,16 +79,10 @@ def sequential_search(query, documents):
     return results, execution_time
 
 
-# -----------------------------------
-# 4. User enters search query
-# -----------------------------------
-
-query = input("\nEnter search query: ")
 
 
-# -----------------------------------
-# 5. Perform sequential search
-# -----------------------------------
+
+#Perform sequential search
 
 results, execution_time = sequential_search(
     query,
@@ -97,9 +90,7 @@ results, execution_time = sequential_search(
 )
 
 
-# -----------------------------------
-# 6. Display results
-# -----------------------------------
+#results
 
 print("\n" + "=" * 60)
 
@@ -141,9 +132,7 @@ for rank, (index, score) in enumerate(
     )
 
 
-# -----------------------------------
-# 7. Display execution time
-# -----------------------------------
+#Display execution time
 
 print("\n" + "=" * 60)
 
