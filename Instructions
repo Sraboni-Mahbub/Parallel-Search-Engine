@@ -7,3 +7,4 @@ Environment setup:
 
 Python libraries setup:
 ---pip install pandas
+---pip install regex

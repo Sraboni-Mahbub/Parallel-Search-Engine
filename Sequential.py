@@ -88,9 +88,8 @@ print("Documents searched:", len(documents))
 
 print("Matching documents:", len(results))
 
-print("\nTop 10 Results")
+print("\nTop 10 Results : ")
 
-print("-" * 60)
 
 
 for rank, (index, score) in enumerate(
