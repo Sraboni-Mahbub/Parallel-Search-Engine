@@ -2,7 +2,20 @@ import pandas as pd
 import time
 import regex
 import bisect
+import threading
+import ctypes
+
 from concurrent.futures import ThreadPoolExecutor
+
+
+# =========================================================
+# GET CURRENT CPU / LOGICAL PROCESSOR
+# Windows only
+# =========================================================
+
+def get_current_cpu():
+
+    return ctypes.windll.kernel32.GetCurrentProcessorNumber()
 
 
 # =========================================================
@@ -13,12 +26,31 @@ def search_partition(pattern, start, end, documents):
 
     results = []
 
+    # -----------------------------------------------------
+    # Identify current worker thread
+    # -----------------------------------------------------
+
+    thread_name = threading.current_thread().name
+
+    start_cpu = get_current_cpu()
+
+    print(
+        f"\n{thread_name} started"
+        f" | Documents: {start} to {end - 1}"
+        f" | Starting CPU: {start_cpu}"
+    )
+
+
+    # -----------------------------------------------------
+    # Search assigned documents
+    # -----------------------------------------------------
+
     for index in range(start, end):
 
         text = documents[index]
 
-        # concurrent=True allows regex matching
-        # to release the GIL
+        # concurrent=True allows the regex library
+        # to release the GIL during matching
         matches = pattern.findall(
             text,
             concurrent=True
@@ -27,9 +59,25 @@ def search_partition(pattern, start, end, documents):
         score = len(matches)
 
         if score > 0:
+
             results.append(
                 (index, score)
             )
+
+
+    # -----------------------------------------------------
+    # Check CPU again after search
+    #
+    # Windows may move a thread from one CPU to another.
+    # -----------------------------------------------------
+
+    end_cpu = get_current_cpu()
+
+    print(
+        f"{thread_name} finished"
+        f" | Ending CPU: {end_cpu}"
+        f" | Matches: {len(results)}"
+    )
 
     return results
 
@@ -56,8 +104,7 @@ def smart_partition(
     # =====================================================
     # SMART PARTITIONING
     #
-    # Find boundaries where total text workload
-    # is approximately equally divided.
+    # Divide total text workload approximately equally.
     # =====================================================
 
     for worker in range(
@@ -97,10 +144,14 @@ def smart_partition(
         )
 
         previous_index = boundary
+
         previous_workload = current_workload
 
 
-    # Last worker
+    # =====================================================
+    # LAST WORKER
+    # =====================================================
+
     partitions.append(
         (
             previous_index,
@@ -134,6 +185,10 @@ if __name__ == "__main__":
         file_path
     )
 
+
+    # =====================================================
+    # HANDLE MISSING VALUES
+    # =====================================================
 
     df["headline"] = (
         df["headline"].fillna("")
@@ -170,13 +225,15 @@ if __name__ == "__main__":
 
 
     # =====================================================
-    # HETEROGENEOUS WORKLOAD INFORMATION
+    # HETEROGENEOUS WORKLOAD
     #
-    # Each document has a different length.
+    # Different documents have different lengths.
     # =====================================================
 
     document_workloads = [
+
         len(document)
+
         for document in documents
     ]
 
@@ -184,7 +241,7 @@ if __name__ == "__main__":
     # =====================================================
     # PRECOMPUTE CUMULATIVE WORKLOAD
     #
-    # This makes smart partitioning extremely fast.
+    # Allows partition boundaries to be found quickly.
     # =====================================================
 
     cumulative_workload = []
@@ -224,7 +281,7 @@ if __name__ == "__main__":
 
 
     # =====================================================
-    # CREATE 4 WORKERS
+    # CREATE THREAD POOL
     # =====================================================
 
     executor = ThreadPoolExecutor(
@@ -257,7 +314,7 @@ if __name__ == "__main__":
     #
     # artificial intelligence
     #
-    # becomes roughly:
+    # becomes:
     #
     # \b(?:artificial|intelligence)\b
 
@@ -330,11 +387,12 @@ if __name__ == "__main__":
 
 
     execution_time = (
-        end_time - start_time
+        end_time
+        - start_time
     )
 
 
-    # Workers close AFTER timer
+    # Worker shutdown outside timer
     executor.shutdown()
 
 
@@ -343,9 +401,18 @@ if __name__ == "__main__":
     # =====================================================
 
     print(
-        "\nSMART PARTITIONING + "
+        "\n========================================"
+    )
+
+    print(
+        "SMART PARTITIONING + "
         "HETEROGENEOUS WORKLOAD"
     )
+
+    print(
+        "========================================"
+    )
+
 
     print(
         "Workers:",
@@ -367,6 +434,13 @@ if __name__ == "__main__":
         )
 
         print(
+            "Document range:",
+            start,
+            "to",
+            end - 1
+        )
+
+        print(
             "Workload:",
             workloads[i],
             "characters"
@@ -378,8 +452,17 @@ if __name__ == "__main__":
     # =====================================================
 
     print(
-        "\nPARALLEL SEARCH RESULTS"
+        "\n========================================"
     )
+
+    print(
+        "PARALLEL SEARCH RESULTS"
+    )
+
+    print(
+        "========================================"
+    )
+
 
     print(
         "Query:",
@@ -395,6 +478,7 @@ if __name__ == "__main__":
         "Matching documents:",
         len(results)
     )
+
 
     print(
         "\nTop 10 Results:"
@@ -414,6 +498,11 @@ if __name__ == "__main__":
         print(
             "Category:",
             df.iloc[index]["category"]
+        )
+
+        print(
+            "Score:",
+            score
         )
 
 
