@@ -1,210 +1,248 @@
 import os
-import time
 import re
-import pandas as pd
-from concurrent.futures import ProcessPoolExecutor
+import time
 from pathlib import Path
+from concurrent.futures import (
+    ProcessPoolExecutor,
+    wait,
+    FIRST_COMPLETED
+)
+import pandas as pd
 
 
 # ============================================================
-# NUMBER OF WORKERS
+# CONFIGURATION
 # ============================================================
 
-# Your PC has 4 physical cores.
-# We deliberately use exactly 4 worker processes.
-WORKERS = 4
+BASE_DIR = Path(__file__).parent
+FILE_PATH = BASE_DIR / "News_Category_Dataset_v3.csv"
 
-
-# Each process keeps access to the prepared documents.
 WORKER_DOCUMENTS = None
 
 
 # ============================================================
-# INITIALIZE EACH PROCESS
+# WORKER INITIALIZATION
 # ============================================================
 
 def initialize_worker(documents):
     """
-    Store the documents inside each worker process.
-    This happens before the search timer starts.
+    Each worker receives the document collection once.
     """
-
     global WORKER_DOCUMENTS
     WORKER_DOCUMENTS = documents
 
 
 # ============================================================
-# WARM-UP FUNCTION
+# WARM-UP
 # ============================================================
 
-def warmup_worker(x):
+def warmup_worker(_):
     """
-    Small operation used to start worker processes
-    before timing begins.
+    Small warm-up operation so worker processes are ready
+    before the actual search timing begins.
     """
-
-    value = 0
+    total = 0
 
     for i in range(10000):
-        value += (i * i) % 97
+        total += i
 
-    return os.getpid(), value + x
+    return os.getpid()
 
 
 # ============================================================
-# SEARCH ONE PARTITION
+# SEARCH ONE CHUNK
 # ============================================================
 
-def search_range(
-    start_index,
-    end_index,
-    query_words
-):
+def search_chunk(start_index, end_index, query_words):
     """
-    Search only the document range assigned
-    to this worker.
+    Searches a small portion of the document collection.
+
+    Returns:
+        List of (document_index, score)
     """
 
-    local_results = []
+    results = []
 
-    # Compile regex once for this worker task.
+    # Compile regex once for this chunk
     patterns = [
-        re.compile(
-            r"\b"
-            + re.escape(word)
-            + r"\b"
-        )
+        re.compile(r"\b" + re.escape(word) + r"\b")
         for word in query_words
     ]
 
-    documents = WORKER_DOCUMENTS
+    for index in range(start_index, end_index):
 
-    for index in range(
-        start_index,
-        end_index
-    ):
-
-        text = documents[index]
+        text = WORKER_DOCUMENTS[index]
 
         score = 0
 
         for pattern in patterns:
-
-            occurrences = len(
-                pattern.findall(text)
-            )
-
-            score += occurrences
+            score += len(pattern.findall(text))
 
         if score > 0:
+            results.append((index, score))
 
-            local_results.append(
-                (index, score)
-            )
+    return results
 
-    return local_results
+
+# ============================================================
+# SMART / DYNAMIC PARTITIONING
+# ============================================================
+
+def create_smart_chunks(total_documents, workers):
+    """
+    Creates many smaller chunks instead of one chunk per worker.
+
+    This allows workers to receive new work whenever they finish
+    their current chunk.
+
+    More chunks than workers = better load balancing.
+    """
+
+    # Create approximately 8 chunks per worker.
+    # Minimum chunk size prevents creating thousands of tiny tasks.
+    chunk_size = max(
+        1000,
+        total_documents // (workers * 8)
+    )
+
+    chunks = []
+
+    start = 0
+
+    while start < total_documents:
+
+        end = min(
+            start + chunk_size,
+            total_documents
+        )
+
+        chunks.append((start, end))
+
+        start = end
+
+    return chunks
 
 
 # ============================================================
 # PARALLEL SEARCH
 # ============================================================
 
-def parallel_search(
-    query_words,
-    total_documents,
-    executor
-):
+def parallel_search(query_words, total_documents, executor, workers):
+    """
+    Performs parallel search using dynamic smart partitioning.
 
-    # ========================================================
-    # TIMER START
-    # ========================================================
+    At most 'workers' chunks are active at the same time.
+    When one worker finishes, another chunk is submitted.
+    """
+
+    # --------------------------------------------------------
+    # Create many small chunks
+    # --------------------------------------------------------
+
+    chunks = create_smart_chunks(
+        total_documents,
+        workers
+    )
+
+    print("\nSmart Partitioning")
+    print("------------------")
+    print(f"Total documents : {total_documents}")
+    print(f"Workers         : {workers}")
+    print(f"Total chunks    : {len(chunks)}")
+
+    # --------------------------------------------------------
+    # Start timing
+    # --------------------------------------------------------
 
     start_time = time.perf_counter()
 
+    all_results = []
 
-    # ========================================================
-    # DIVIDE DATA INTO EXACTLY 4 PARTS
-    # ========================================================
+    # --------------------------------------------------------
+    # Submit initial chunks
+    # --------------------------------------------------------
 
-    chunk_size = (
-        total_documents
-        + WORKERS
-        - 1
-    ) // WORKERS
+    next_chunk = 0
 
+    active_futures = {}
 
-    futures = []
+    initial_tasks = min(
+        workers,
+        len(chunks)
+    )
 
+    for _ in range(initial_tasks):
 
-    # ========================================================
-    # ASSIGN ONE PART TO EACH WORKER
-    # ========================================================
-
-    for worker_id in range(WORKERS):
-
-        start_index = (
-            worker_id
-            * chunk_size
-        )
-
-        end_index = min(
-            start_index + chunk_size,
-            total_documents
-        )
-
-        if start_index >= end_index:
-            break
+        start_index, end_index = chunks[next_chunk]
 
         future = executor.submit(
-            search_range,
+            search_chunk,
             start_index,
             end_index,
             query_words
         )
 
-        futures.append(future)
-
-
-    # ========================================================
-    # COLLECT RESULTS
-    # ========================================================
-
-    results = []
-
-    for future in futures:
-
-        worker_results = future.result()
-
-        results.extend(
-            worker_results
+        active_futures[future] = (
+            start_index,
+            end_index
         )
 
+        next_chunk += 1
 
-    # ========================================================
-    # SORT RESULTS
-    # ========================================================
+    # --------------------------------------------------------
+    # Dynamic scheduling
+    # --------------------------------------------------------
 
-    results.sort(
+    while active_futures:
+
+        completed, _ = wait(
+            active_futures,
+            return_when=FIRST_COMPLETED
+        )
+
+        for future in completed:
+
+            chunk_info = active_futures.pop(future)
+
+            chunk_results = future.result()
+
+            all_results.extend(chunk_results)
+
+            # ------------------------------------------------
+            # Immediately give another chunk to the
+            # available worker
+            # ------------------------------------------------
+
+            if next_chunk < len(chunks):
+
+                start_index, end_index = chunks[next_chunk]
+
+                new_future = executor.submit(
+                    search_chunk,
+                    start_index,
+                    end_index,
+                    query_words
+                )
+
+                active_futures[new_future] = (
+                    start_index,
+                    end_index
+                )
+
+                next_chunk += 1
+
+    # --------------------------------------------------------
+    # Sort results
+    # --------------------------------------------------------
+
+    all_results.sort(
         key=lambda x: x[1],
         reverse=True
     )
 
+    execution_time = time.perf_counter() - start_time
 
-    # ========================================================
-    # TIMER END
-    # ========================================================
-
-    end_time = time.perf_counter()
-
-    execution_time = (
-        end_time
-        - start_time
-    )
-
-    return (
-        results,
-        execution_time
-    )
+    return all_results, execution_time
 
 
 # ============================================================
@@ -213,253 +251,180 @@ def parallel_search(
 
 def main():
 
-    # CSV should be in the same Dataset2 folder
-    # as this Python file.
+    print("=" * 60)
+    print("PARALLEL SEARCH ENGINE")
+    print("=" * 60)
 
-    file_path = (
-        Path(__file__).parent
-        / "News_Category_Dataset_v3.csv"
+    # --------------------------------------------------------
+    # Number of workers
+    # --------------------------------------------------------
+
+    workers = int(
+        input("Enter number of workers: ")
     )
 
+    if workers < 1:
+        print("Workers must be at least 1.")
+        return
 
-    # ========================================================
-    # LOAD DATASET
-    # NOT TIMED
-    # ========================================================
+    # --------------------------------------------------------
+    # Load dataset
+    # --------------------------------------------------------
 
-    if not file_path.exists():
+    print("\nLoading dataset...")
 
-        raise FileNotFoundError(
-            f"Dataset not found:\n{file_path}"
-        )
+    df = pd.read_csv(FILE_PATH)
 
+    df["headline"] = df["headline"].fillna("")
+    df["short_description"] = df["short_description"].fillna("")
 
-    df = pd.read_csv(
-        file_path
-    )
-
-
-    # ========================================================
-    # HANDLE MISSING VALUES
-    # ========================================================
-
-    df["headline"] = (
-        df["headline"].fillna("")
-    )
-
-    df["short_description"] = (
-        df["short_description"].fillna("")
-    )
-
-
-    print(
-        "Total documents:",
-        len(df)
-    )
-
-    print(
-        "Worker processes used:",
-        WORKERS
-    )
-
-
-    # ========================================================
-    # PREPARE DOCUMENTS
-    # NOT TIMED
-    # ========================================================
+    # --------------------------------------------------------
+    # Prepare documents
+    # --------------------------------------------------------
 
     documents = (
-
         df["headline"].astype(str)
-
         + " "
-
-        + df[
-            "short_description"
-        ].astype(str)
-
+        + df["short_description"].astype(str)
     ).str.lower().tolist()
 
+    total_documents = len(documents)
 
-    # ========================================================
-    # USER INPUT
-    # NOT TIMED
-    # ========================================================
+    print(f"Documents loaded: {total_documents}")
+
+    # --------------------------------------------------------
+    # Query
+    # --------------------------------------------------------
 
     query = input(
         "\nEnter search query: "
-    )
+    ).strip().lower()
 
-
-    query_words = (
-        query
-        .lower()
-        .split()
-    )
-
-
-    if not query_words:
-
-        print(
-            "Please enter at least one search word."
-        )
-
+    if not query:
+        print("Search query cannot be empty.")
         return
 
+    query_words = query.split()
 
-    # ========================================================
-    # CREATE EXACTLY 4 PROCESSES
-    # NOT TIMED
-    # ========================================================
+    # --------------------------------------------------------
+    # Create process pool
+    # --------------------------------------------------------
+
+    print("\nStarting worker processes...")
 
     with ProcessPoolExecutor(
-
-        max_workers=WORKERS,
-
+        max_workers=workers,
         initializer=initialize_worker,
-
         initargs=(documents,)
-
     ) as executor:
 
+        # ----------------------------------------------------
+        # Warm up workers
+        # ----------------------------------------------------
 
-        # ====================================================
-        # WARM UP
-        # NOT TIMED
-        # ====================================================
-
-        warmup_results = list(
-
-            executor.map(
+        warmup_futures = [
+            executor.submit(
                 warmup_worker,
-                range(WORKERS)
+                i
             )
+            for i in range(workers)
+        ]
 
-        )
+        worker_pids = set()
 
-
-        unique_pids = {
-
-            pid
-
-            for pid, value
-            in warmup_results
-
-        }
-
+        for future in warmup_futures:
+            worker_pids.add(
+                future.result()
+            )
 
         print(
-            "Worker processes:",
-            WORKERS
+            f"Worker processes ready: {len(worker_pids)}"
         )
 
+        # ----------------------------------------------------
+        # Perform smart parallel search
+        # ----------------------------------------------------
 
-        # ====================================================
-        # PARALLEL SEARCH
-        # ====================================================
-
-        results, execution_time = (
-
-            parallel_search(
-                query_words,
-                len(documents),
-                executor
-            )
-
+        results, execution_time = parallel_search(
+            query_words,
+            total_documents,
+            executor,
+            workers
         )
-
 
     # ========================================================
     # DISPLAY RESULTS
-    # NOT TIMED
     # ========================================================
 
-    print(
-        "\n========================================"
-    )
+    print("\n" + "=" * 60)
+    print("SEARCH RESULTS")
+    print("=" * 60)
 
     print(
-        "PARALLEL SEARCH RESULTS"
+        f"Matching documents: {len(results)}"
     )
 
-    print(
-        "========================================"
-    )
+    print("\nTop 10 Results:")
+    print("-" * 60)
 
-    print(
-        "Query:",
-        query
-    )
-
-    print(
-        "Documents searched:",
-        len(documents)
-    )
-
-    print(
-        "Matching documents:",
-        len(results)
-    )
-
-
-    print(
-        "\nTop 10 Results:"
-    )
-
-
-    for rank, (
-        index,
-        score
-    ) in enumerate(
+    for rank, (index, score) in enumerate(
         results[:10],
         start=1
     ):
 
         print(
-            f"\n{rank}. "
-            f"{df.iloc[index]['headline']}"
+            f"{rank}. Score: {score}"
         )
 
         print(
-            "Category:",
-            df.iloc[index]["category"]
+            f"   {documents[index][:200]}"
         )
 
-        print(
-            "Score:",
-            score
-        )
-
+        print()
 
     # ========================================================
     # PERFORMANCE
     # ========================================================
 
+    print("=" * 60)
+    print("PERFORMANCE")
+    print("=" * 60)
+
     print(
-        "\n========================================"
+        f"Workers          : {workers}"
     )
 
     print(
-        "PARALLEL SEARCH PERFORMANCE"
+        f"Execution time   : {execution_time:.6f} seconds"
     )
 
     print(
-        "========================================"
+        f"Results found    : {len(results)}"
     )
 
-    print(
-        "Workers:",
-        WORKERS
-    )
+    # --------------------------------------------------------
+    # Save execution time
+    # --------------------------------------------------------
+
+    time_file = BASE_DIR / "parallel_time.txt"
+
+    with open(time_file, "w") as f:
+
+        f.write(
+            f"{execution_time}\n"
+        )
+
+        f.write(
+            f"{workers}\n"
+        )
 
     print(
-        f"Execution time: "
-        f"{execution_time:.6f} seconds"
+        f"\nExecution time saved to: {time_file}"
     )
 
 
 # ============================================================
-# START PROGRAM
+# WINDOWS ENTRY POINT
 # ============================================================
 
 if __name__ == "__main__":
